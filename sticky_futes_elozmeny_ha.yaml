@@ -1,0 +1,39 @@
+# =============================================================================
+#  Sticky fűtés előzmény – Home Assistant template szenzor
+#
+#  A configuration.yaml-ba kell tenni (vagy a templates.yaml-ba „template:” nélkül),
+#  ugyanoda, ahová a sticky_idojaras_ha.yaml is került. Utána: Fejlesztői eszközök →
+#  YAML → „Template entitások” újratöltése.
+#
+#  10 percenként elmenti a radiátorfej hőmérsékletét, és hogy épp fűtött-e.
+#  A „pontok” attribútumban az utolsó 24 óra van (144 pont), vesszővel elválasztva:
+#    tizedfokban, és „h” a végén, ha akkor fűtött – pl. „215,218h,221h,223”
+#  A Sticky ebből rajzolja a grafikont.
+#
+#  Ha a radiátorfej entitása más, cseréld le alább MINDHÁROM helyen.
+# =============================================================================
+template:
+  - trigger:
+      - trigger: time_pattern
+        minutes: /10
+      - trigger: homeassistant
+        event: start
+      - trigger: event
+        event_type: event_template_reloaded
+    sensor:
+      - name: "Sticky fűtés előzmény"
+        unique_id: sticky_futes_elozmeny
+        icon: mdi:chart-line
+        unit_of_measurement: "°C"
+        state: >
+          {{ state_attr('climate.nappali_radiator', 'current_temperature') | float(0) }}
+        attributes:
+          pontok: >
+            {% set prev = this.attributes.pontok if (this is defined and this.attributes is defined and this.attributes.pontok is defined) else '' %}
+            {% set ns = namespace(l = (prev | string).split(',') | reject('eq', '') | list) %}
+            {% set t = state_attr('climate.nappali_radiator', 'current_temperature') %}
+            {% if t is number %}
+              {% set heating = state_attr('climate.nappali_radiator', 'hvac_action') == 'heating' %}
+              {% set ns.l = ns.l + [ ((t | float * 10) | round(0) | int) | string ~ ('h' if heating else '') ] %}
+            {% endif %}
+            {{ ns.l[-144:] | join(',') }}

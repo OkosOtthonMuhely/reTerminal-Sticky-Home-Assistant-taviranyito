@@ -1,0 +1,65 @@
+# =============================================================================
+#  Sticky időjárás – Home Assistant template szenzor
+#
+#  Ezt a configuration.yaml-ba kell tenni (vagy ha van külön templates.yaml,
+#  akkor oda a "template:" kulcs nélkül). Utána: Fejlesztői eszközök → YAML →
+#  "Template entitások" újratöltése (vagy HA újraindítás).
+#
+#  CSERÉLD LE kétszer a "weather.forecast_home"-ot a saját időjárás entitásodra!
+#  (Beállítások → Eszközök és szolgáltatások → Entitások, keress rá: "weather.")
+#
+#  Mit csinál: félóránként lekéri a napi előrejelzést, és egyetlen rövid
+#  szövegbe csomagolja, amit a Sticky be tud olvasni:
+#    ma:      állapot|most|max|min|csapadék%|csapadék mm|szél|pára
+#    napok:   név|állapot|max|min|csapadék%|csapadék mm      (3 nap, ";"-vel)
+#  A csapadék % helyén -1 áll, ha az időjárás-szolgáltató nem ad esélyt
+#  (pl. a Met.no csak mm-t ad) – ilyenkor a Sticky a mm-t mutatja.
+# =============================================================================
+template:
+  - trigger:
+      - trigger: time_pattern
+        minutes: /30
+      - trigger: homeassistant
+        event: start
+      # a template entitások újratöltésekor is azonnal frissüljön (ne csak félóránként)
+      - trigger: event
+        event_type: event_template_reloaded
+    action:
+      - action: weather.get_forecasts
+        data:
+          type: daily
+        target:
+          entity_id: weather.forecast_home
+        response_variable: fc
+    sensor:
+      - name: "Sticky időjárás"
+        unique_id: sticky_idojaras
+        icon: mdi:weather-partly-cloudy
+        state: >
+          {% set w = 'weather.forecast_home' %}
+          {% set f = fc[w].forecast if (fc is defined and w in fc) else [] %}
+          {% set days = ['Hétfő','Kedd','Szerda','Csütörtök','Péntek','Szombat','Vasárnap'] %}
+          {% set t = state_attr(w, 'temperature') | float(0) %}
+          {% set today = f[0] if f | count > 0 else {} %}
+          {% set ns = namespace(out=[]) %}
+          {% set ns.out = [[
+               states(w),
+               t | round(0) | int,
+               (today.temperature | default(t)) | float(0) | round(0) | int,
+               (today.templow | default(t)) | float(0) | round(0) | int,
+               (today.precipitation_probability | default(-1)) | int(-1),
+               (today.precipitation | default(0)) | float(0) | round(1),
+               (state_attr(w, 'wind_speed') | float(0)) | round(0) | int,
+               (state_attr(w, 'humidity') | float(0)) | round(0) | int
+             ] | join('|')] %}
+          {% for d in f[1:4] %}
+            {% set ns.out = ns.out + [[
+                 days[as_local(as_datetime(d.datetime)).weekday()],
+                 d.condition,
+                 d.temperature | float(0) | round(0) | int,
+                 (d.templow | default(d.temperature)) | float(0) | round(0) | int,
+                 (d.precipitation_probability | default(-1)) | int(-1),
+                 (d.precipitation | default(0)) | float(0) | round(1)
+               ] | join('|')] %}
+          {% endfor %}
+          {{ ns.out | join(';') }}
