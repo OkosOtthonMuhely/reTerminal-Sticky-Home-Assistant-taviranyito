@@ -1,0 +1,2264 @@
+# =============================================================================
+#  reTerminal Sticky – Home Assistant fali vezérlő (minta projekt)
+#
+#  E-papíros nappali vezérlő a Seeed reTerminal Sticky-re (ESP32-S3, 800×480
+#  fekete-fehér kijelző, érintőképernyő, 3 gomb, mikrofon, hőmérő, akkumulátor).
+#  Minden, amit a saját lakásodhoz át kell írnod, a közvetlenül alatta lévő
+#  „substitutions” blokkban van. Az ikonok Material Design Icon NEVEK:
+#  https://pictogrammers.com/library/mdi/   (pl. „ceiling-light”, „sofa”)
+#
+#  MENÜ (főképernyő)                      TV TÁVIRÁNYÍTÓ (a 4. csempe hosszan)
+#  +-------------+-------------+          +--------+--------+--------+
+#  |   CSEMPE 1  |   CSEMPE 2  |          | BE/KI  | EXTRA  | FORRÁS1|
+#  |   (lámpa)   |   (lámpa)   |          +--------+--------+--------+
+#  +-------------+-------------+          |  FORRÁS 2    |  FORRÁS 3    |
+#  |   CSEMPE 3  |   CSEMPE 4  |          +--------------+--------------+
+#  |   (lámpa)   | (bármilyen  |          |   HALKÍT     |  HANGOSÍT    |
+#  |             |  kapcsoló)  |          +--------------+--------------+
+#  +-------------+-------------+          |           VISSZA            |
+#  |  FŰTÉS  21,4°  cél 22,0°  |          +-----------------------------+
+#  +-------------+-------------+
+#  |  HANGALAPÚ  | IDŐJÁRÁS    |          LÁMPA OLDAL (1–3. csempe hosszan)
+#  |  ASSZISZTENS|  ☁  18°     |            BE/KI, fényerő sáv, színhő sáv
+#  +-------------+-------------+
+#
+#  MŰKÖDÉS
+#    Csempe:        rövid érintés = be/ki, hosszan (0,6 mp) = részletes oldal
+#                   (1–3. csempe: lámpa oldal, 4. csempe: TV távirányító)
+#    Fűtés sáv:     a fűtés oldal (cél ±0,5 fok, mód, gyors beállítások, 24 órás grafikon)
+#                   – fűtés közben a sáv sötét
+#    Bal alul:      hangalapú asszisztens (Home Assistant Assist)
+#    Jobb alul:     időjárás oldal (ugyanez jelenik meg alvás közben is)
+#    Gombok:        OK = asszisztens a menüben, máshol vissza a menübe
+#                   FEL / LE = a menüben és a lámpa oldalakon lapozás a lámpák között,
+#                   a TV oldalon hangerő, a fűtés oldalon ±0,5 fok
+#    Alvás:         ha nincs használatban, mély alvásba megy (a kijelző tartja a képet),
+#                   bármelyik gombra felébred, és magától is 4 óránként frissít.
+#
+#  HOME ASSISTANT OLDAL (külön fájlok, a configuration.yaml-ba)
+#    sticky_idojaras_ha.yaml        – az időjárás oldalhoz (template szenzor)
+#    sticky_futes_elozmeny_ha.yaml  – a fűtés grafikonhoz (template szenzor)
+#  Az ESPHome integrációban engedélyezd: „Az eszköz Home Assistant műveleteket
+#  hajthat végre” – enélkül a gombok nem tudnak lámpát kapcsolni.
+#
+#  A secrets.yaml-ban kell: wifi_ssid, wifi_password, ota_password, api_encryption_key
+# =============================================================================
+substitutions:
+  # ---------------------------------------------------------------------------
+  #  >>>>>>>>>>>>>>>>>>>>>>  INNEN SZERKESZD  <<<<<<<<<<<<<<<<<<<<<<
+  # ---------------------------------------------------------------------------
+  device_name: sticky-nappali             # az ESPHome eszköz neve (kisbetű, kötőjel)
+  friendly_name: "Sticky Nappali"         # így látszik a Home Assistantban
+  # ---- CSEMPE 1 (bal felül) – lámpa: hosszan nyomva fényerő / színhő oldal ----
+  tile1_entity: light.nappali_mennyezeti
+  tile1_label: "Mennyezeti"
+  tile1_icon: ceiling-light
+  # ---- CSEMPE 2 (jobb felül) – lámpa ----------------------------------------
+  tile2_entity: light.allolampa
+  tile2_label: "Állólámpa"
+  tile2_icon: floor-lamp
+  # ---- CSEMPE 3 (bal alul) – lámpa ------------------------------------------
+  tile3_entity: light.polc_led
+  tile3_label: "Polc"
+  tile3_icon: led-strip-variant
+  # ---- CSEMPE 4 (jobb alul) – bármi, ami be/ki kapcsolható (switch,
+  #      input_boolean, light...). Hosszan nyomva a TV távirányító nyílik meg. ----
+  tile4_entity: switch.tv
+  tile4_label: "TV"
+  tile4_icon: television
+  # ---- ALSÓ SOR -------------------------------------------------------------
+  voice_label: "ASSZISZTENS"              # bal alul: hangalapú asszisztens
+  voice_icon: home-assistant
+  weather_label: "IDŐJÁRÁS"               # jobb alul: időjárás oldal
+  # ---- FŰTÉS (radiátor termosztátfej vagy bármilyen climate entitás) -------
+  heat_entity: climate.nappali_radiator
+  heat_label: "Fűtés"
+  #  A 24 órás grafikon adatai (sticky_futes_elozmeny_ha.yaml a Home Assistantban)
+  heat_history_entity: sensor.sticky_futes_elozmeny
+  #  Három gyors beállítás a fűtés oldalon (név + hőmérséklet)
+  heat_preset1_label: "Eco"
+  heat_preset1: "18"
+  heat_preset2_label: "Komfort"
+  heat_preset2: "22"
+  heat_preset3_label: "Éjszaka"
+  heat_preset3: "17"
+  # ---- IDŐJÁRÁS (sticky_idojaras_ha.yaml a Home Assistantban) -------------
+  weather_entity: sensor.sticky_idojaras
+  # ---- TV TÁVIRÁNYÍTÓ OLDAL -------------------------------------------------
+  #  A hangerő és a források ennek a media playernek mennek.
+  tv_media_player: media_player.tv
+  #  A BE/KI gomb ezt kapcsolja (és ennek az állapotát mutatja).
+  tv_power_entity: switch.tv
+  #  EXTRA gomb: bármilyen be/ki kapcsolható entitás (pl. Ambilight, hangprojektor).
+  tv_extra_entity: light.tv_hatterfeny
+  tv_extra_label: "HÁTTÉRFÉNY"
+  tv_extra_icon: television-ambient-light
+  #  Három forrás / alkalmazás gomb. A „source” pontosan egyezzen a TV source_list
+  #  értékeivel (Fejlesztői eszközök → Állapotok → a media player → source_list).
+  tv_src1_label: "KONZOL"
+  tv_src1_icon: controller
+  tv_src1_source: "HDMI 2"
+  tv_src2_label: "YOUTUBE"
+  tv_src2_icon: youtube
+  tv_src2_source: "YouTube"
+  tv_src3_label: "NETFLIX"
+  tv_src3_icon: netflix
+  tv_src3_source: "Netflix"
+  # ---- ENERGIATAKARÉKOSSÁG --------------------------------------------------
+  #  "true"  – a beállított idő után elalszik, bármelyik gombra felébred.
+  #  "false" – soha nem alszik (mindig friss, de kb. naponta tölteni kell).
+  low_power: "true"
+  awake_after_button_ms: "120000"         # 2 percig ébren marad érintés után
+  awake_after_timer_ms:  "25000"          # 25 mp-ig ébren marad egy magától indult frissítéskor
+  sleep_duration: 240min                  # alvás közben 4 óránként magától frissít
+  # ---------------------------------------------------------------------------
+  #  >>>>>>>>>>>>>>>>>>>>>>  EDDIG SZERKESZD  <<<<<<<<<<<<<<<<<<<<<<
+  #  Innentől a „gépház” – átírni csak akkor kell, ha a működést változtatnád.
+  # ---------------------------------------------------------------------------
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  on_boot:
+    # 1000-es prioritás: minden komponens előtt (a kijelzőé 800).
+    # Feloldja a mély alvás alatti lábtartásokat, és hidegindítja az e-papír panelt.
+    - priority: 1000
+      then:
+        - lambda: |-
+            gpio_deep_sleep_hold_dis();
+            gpio_hold_dis((gpio_num_t) 45);
+            gpio_hold_dis((gpio_num_t) 46);
+            const gpio_num_t EPD_EN  = (gpio_num_t) 47;
+            const gpio_num_t EPD_RST = (gpio_num_t) 17;
+            gpio_hold_dis(EPD_EN);
+            gpio_hold_dis(EPD_RST);
+            gpio_reset_pin(EPD_EN);
+            gpio_reset_pin(EPD_RST);
+            gpio_set_direction(EPD_EN,  GPIO_MODE_OUTPUT);
+            gpio_set_direction(EPD_RST, GPIO_MODE_OUTPUT);
+            gpio_set_level(EPD_RST, 0);
+            gpio_set_level(EPD_EN,  0);
+            delay(150);
+            gpio_set_level(EPD_EN,  1);
+            delay(30);
+            gpio_set_level(EPD_RST, 1);
+            delay(30);
+            ESP_LOGI("epd", "panel hidegindítva");
+    - priority: 600
+      then:
+        - lambda: |-
+            // Gombos ébresztés = valaki itt van, maradjon ébren. Időzített ébredés = gyors frissítés.
+            auto cause = esp_sleep_get_wakeup_cause();
+            bool by_button = (cause == ESP_SLEEP_WAKEUP_EXT1);
+            id(awake_ms) = by_button ? ${awake_after_button_ms} : ${awake_after_timer_ms};
+            ESP_LOGI("sleep", "ébredés oka=%d  ébren marad=%d ms", (int) cause, id(awake_ms));
+        - deep_sleep.prevent: sleeper
+        # tápfeszültség-retesz (enélkül a készülék kikapcsol), érintés, mikrofon, töltés
+        - output.turn_on: pwr_hold
+        - output.turn_on: pwr_lock
+        - switch.turn_on: touch_power_enable
+        - output.turn_on: mic_power_enable
+        - output.turn_on: charge_enable
+        - pcf8563.read_time:
+    - priority: -100
+      then:
+        # Időzített (nem gombos) ébredéskor maradjon az időjárás képernyőn –
+        # a Home Assistant adata pár másodperc múlva megjön, és újrarajzolja.
+        - lambda: |-
+            if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER) id(ui_mode) = 14;
+        - delay: 2s
+        # Két teljes frissítés ébredés után, egy teljes frissítési ciklusnál nagyobb szünettel.
+        - component.update: eink
+        - delay: 10s
+        - component.update: eink
+        - script.execute: idle_timer
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: ESP32S3
+  flash_size: 32MB
+  framework:
+    type: arduino
+    advanced:
+      enable_idf_experimental_features: true
+
+# A napló a CH343P USB-soros átalakítón keresztül (UART0) jön.
+logger:
+  hardware_uart: UART0
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  fast_connect: true
+  power_save_mode: LIGHT
+  ap:
+    ssid: "${device_name} beállítás"
+
+captive_portal:
+
+spi:
+  clk_pin: GPIO13
+  mosi_pin: GPIO14
+  miso_pin: GPIO12
+
+i2c:
+  - id: i2c_sensor
+    scl: GPIO0
+    sda: GPIO1
+    frequency: 400kHz
+    # Várt címek: 0x44 (SHT40 hőmérő), 0x51 (RTC óra), 0x55 (BQ27220 akkumulátor), 0x6A (IMU).
+    scan: true
+  - id: i2c_touch
+    scl: GPIO2
+    sda: GPIO3
+    frequency: 100kHz
+
+i2s_audio:
+  i2s_lrclk_pin: GPIO19
+
+# =============================================================================
+#  MÉLY ALVÁS – az OK/FEL/LE gombra ébred, és sleep_duration időnként magától.
+#  A GPIO45/46 a tápfeszültség-retesz: a go_to_sleep script alvás közben is
+#  tartja őket, így a készülék alszik, nem kapcsol ki. Az OK hosszan nyomva
+#  (kb. 5 mp) kikapcsolja, majd újra bekapcsolja.
+# =============================================================================
+deep_sleep:
+  id: sleeper
+  esp32_ext1_wakeup:
+    pins:
+      - number: GPIO4
+        mode: INPUT_PULLUP
+        allow_other_uses: true
+      - number: GPIO5
+        mode: INPUT_PULLUP
+        allow_other_uses: true
+      - number: GPIO6
+        mode: INPUT_PULLUP
+        allow_other_uses: true
+    mode: ANY_LOW
+  sleep_duration: ${sleep_duration}
+
+output:
+  - platform: gpio
+    pin:
+      number: GPIO45
+      ignore_strapping_warning: true
+    id: pwr_hold
+  - platform: gpio
+    pin:
+      number: GPIO46
+      ignore_strapping_warning: true
+    id: pwr_lock
+  - platform: gpio
+    pin: GPIO38
+    id: mic_power_enable
+  # BQ25616 töltő engedélyezés, alacsony szinten aktív. BE = a láb alacsony = tölt.
+  - platform: gpio
+    pin:
+      number: GPIO39
+      inverted: true
+    id: charge_enable
+  - platform: ledc
+    pin: GPIO48
+    id: buzzer_pwm
+    frequency: 2700Hz
+
+switch:
+  # Az érintés tengelyeinek javítása, a Home Assistantból állítható.
+  - platform: template
+    id: flip_x
+    name: "Érintés tükrözés X"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: config
+  - platform: template
+    id: flip_y
+    name: "Érintés tükrözés Y"
+    optimistic: true
+    # Ezen a lapon az Y-t kell tükrözni, az X-et nem.
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+  - platform: gpio
+    pin: GPIO42
+    id: touch_power_enable
+    internal: true
+    restore_mode: ALWAYS_ON
+    setup_priority: 1100
+
+light:
+  # a csipogó (buzzer) PWM-mel, rövid visszajelző hangokhoz
+  - platform: monochromatic
+    output: buzzer_pwm
+    id: buzzer
+    internal: true
+    default_transition_length: 0s
+
+time:
+  # a beépített RTC óra (alvás alatt is jár), a Home Assistant időre szinkronizálja
+  - platform: pcf8563
+    i2c_id: i2c_sensor
+    id: rtc_time
+    address: 0x51
+    update_interval: never
+  - platform: homeassistant
+    id: ha_time
+    on_time_sync:
+      then:
+        - pcf8563.write_time:
+
+# =============================================================================
+#  ÁLLAPOT (globális változók)
+#  ui_mode – melyik oldal látszik:
+#    0 menü, 1 hallgat, 2 gondolkodik, 3 válasz (asszisztens), 5 TV távirányító,
+#    6 lámpa oldal, 14 időjárás, 15 fűtés
+# =============================================================================
+globals:
+  - id: ui_mode
+    type: int
+    restore_value: false
+    initial_value: '0'
+  # meddig maradjon ébren (ms) – gombos vagy időzített ébredés szerint
+  - id: awake_ms
+    type: int
+    restore_value: false
+    initial_value: '${awake_after_button_ms}'
+  # melyik érintési zónára koppintottál (lásd a touchscreen részt)
+  - id: hit_tile
+    type: int
+    restore_value: false
+    initial_value: '-1'
+  # az asszisztens: amit hallott, és amit válaszolt
+  - id: last_heard
+    type: std::string
+    restore_value: false
+    initial_value: '""'
+  - id: last_reply
+    type: std::string
+    restore_value: false
+    initial_value: '""'
+  # Csak az elalvás előtti utolsó rajzolásnál igaz – ilyenkor kerül a hold a fejlécbe.
+  - id: sleeping
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  # Melyik lámpa oldal látszik: 0 = 1. csempe, 1 = 2. csempe, 2 = 3. csempe.
+  - id: light_page
+    type: int
+    restore_value: false
+    initial_value: '0'
+  # Az utolsó érintés X koordinátája (a tükrözés után) – a lámpa sávokhoz kell.
+  - id: touch_x
+    type: int
+    restore_value: false
+    initial_value: '0'
+  # fűtés: a helyben választott célhőmérséklet, amíg küldés alatt van (NAN = a Home Assistantét követi)
+  - id: heat_set
+    type: float
+    restore_value: false
+    initial_value: 'NAN'
+  # a gombkezelők ide jegyzik fel, melyik oldalon nyomták meg a gombot
+  - id: btn_mode
+    type: int
+    restore_value: false
+    initial_value: '0'
+
+# Betűtípusok – mindegyikhez hozzáadva a magyar ékezetes betűk és a fok jel.
+font:
+  - file: "gfonts://Inter@700"
+    id: f_tile
+    size: 27
+    glyphsets: [GF_Latin_Kernel]
+    glyphs: "áéíóöőúüűÁÉÍÓÖŐÚÜŰ°"
+  - file: "gfonts://Inter@700"
+    id: f_state
+    size: 21
+    glyphsets: [GF_Latin_Kernel]
+    glyphs: "áéíóöőúüűÁÉÍÓÖŐÚÜŰ°"
+  - file: "gfonts://Inter@700"
+    id: f_head
+    size: 36
+    glyphsets: [GF_Latin_Kernel]
+    glyphs: "áéíóöőúüűÁÉÍÓÖŐÚÜŰ°"
+  - file: "gfonts://Inter@400"
+    id: f_body
+    size: 24
+    glyphsets: [GF_Latin_Kernel]
+    glyphs: "áéíóöőúüűÁÉÍÓÖŐÚÜŰ°"
+  - file: "gfonts://Inter@500"
+    id: f_reply
+    size: 31
+    glyphsets: [GF_Latin_Kernel]
+    glyphs: "áéíóöőúüűÁÉÍÓÖŐÚÜŰ°"
+  # nagy számok a fűtés oldalon (csak a szükséges karakterekkel – így kevesebb helyet foglal)
+  - file: "gfonts://Inter@800"
+    id: f_num
+    size: 56
+    glyphs: "0123456789,.°-+"
+  - file: "gfonts://Inter@800"
+    id: f_big
+    size: 96
+    glyphsets: [GF_Latin_Kernel]
+    glyphs: "áéíóöőúüűÁÉÍÓÖŐÚÜŰ°"
+  - file: "gfonts://Inter@400"
+    id: f_small
+    size: 17
+    glyphsets: [GF_Latin_Kernel]
+    glyphs: "áéíóöőúüűÁÉÍÓÖŐÚÜŰ°"
+
+# Ikonok – BINARY + chroma_key: csak a rajzolat pontjai, háttér-doboz nélkül.
+image:
+  # ---- menü ----
+  - platform: file
+    id: ic_tile1
+    file: mdi:${tile1_icon}
+    resize: 96x96
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ic_tile2
+    file: mdi:${tile2_icon}
+    resize: 96x96
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ic_tile3
+    file: mdi:${tile3_icon}
+    resize: 96x96
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ic_tile4
+    file: mdi:${tile4_icon}
+    resize: 96x96
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ic_heat
+    file: mdi:radiator
+    resize: 56x56
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ic_mic
+    file: mdi:${voice_icon}
+    resize: 64x64
+    type: BINARY
+    transparency: chroma_key
+  # ---- asszisztens oldalak ----
+  - platform: file
+    id: ic_listening
+    file: mdi:microphone-message
+    resize: 160x160
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ic_thinking
+    file: mdi:dots-horizontal-circle-outline
+    resize: 160x160
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ic_back
+    file: mdi:arrow-left
+    resize: 40x40
+    type: BINARY
+    transparency: chroma_key
+  # ---- TV távirányító ----
+  - platform: file
+    id: ic_power
+    file: mdi:power
+    resize: 80x80
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ic_tv_extra
+    file: mdi:${tv_extra_icon}
+    resize: 80x80
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ic_src1
+    file: mdi:${tv_src1_icon}
+    resize: 80x80
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ic_src2
+    file: mdi:${tv_src2_icon}
+    resize: 80x80
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ic_src3
+    file: mdi:${tv_src3_icon}
+    resize: 80x80
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ic_vol_down
+    file: mdi:volume-minus
+    resize: 80x80
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ic_vol_up
+    file: mdi:volume-plus
+    resize: 80x80
+    type: BINARY
+    transparency: chroma_key
+  # ---- hold a fejlécben, amíg mély alvásban van ----
+  - platform: file
+    id: ic_sleep
+    file: mdi:sleep
+    resize: 28x28
+    type: BINARY
+    transparency: chroma_key
+  # ---- időjárás: nagy (ma) és kicsi (előrejelzés) ikonok ----
+  - platform: file
+    id: wb_sunny
+    file: mdi:weather-sunny
+    resize: 150x150
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ws_sunny
+    file: mdi:weather-sunny
+    resize: 72x72
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: wb_night
+    file: mdi:weather-night
+    resize: 150x150
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ws_night
+    file: mdi:weather-night
+    resize: 72x72
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: wb_partly
+    file: mdi:weather-partly-cloudy
+    resize: 150x150
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ws_partly
+    file: mdi:weather-partly-cloudy
+    resize: 72x72
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: wb_cloudy
+    file: mdi:weather-cloudy
+    resize: 150x150
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ws_cloudy
+    file: mdi:weather-cloudy
+    resize: 72x72
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: wb_fog
+    file: mdi:weather-fog
+    resize: 150x150
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ws_fog
+    file: mdi:weather-fog
+    resize: 72x72
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: wb_rainy
+    file: mdi:weather-rainy
+    resize: 150x150
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ws_rainy
+    file: mdi:weather-rainy
+    resize: 72x72
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: wb_pouring
+    file: mdi:weather-pouring
+    resize: 150x150
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ws_pouring
+    file: mdi:weather-pouring
+    resize: 72x72
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: wb_storm
+    file: mdi:weather-lightning-rainy
+    resize: 150x150
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ws_storm
+    file: mdi:weather-lightning-rainy
+    resize: 72x72
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: wb_snowy
+    file: mdi:weather-snowy
+    resize: 150x150
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ws_snowy
+    file: mdi:weather-snowy
+    resize: 72x72
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: wb_windy
+    file: mdi:weather-windy
+    resize: 150x150
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ws_windy
+    file: mdi:weather-windy
+    resize: 72x72
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: wb_alert
+    file: mdi:alert-circle-outline
+    resize: 150x150
+    type: BINARY
+    transparency: chroma_key
+  - platform: file
+    id: ws_alert
+    file: mdi:alert-circle-outline
+    resize: 72x72
+    type: BINARY
+    transparency: chroma_key
+
+sensor:
+  # ---- fűtés: a radiátorfej saját mérése és a célhőmérséklet ----
+  - platform: homeassistant
+    id: heat_cur
+    entity_id: ${heat_entity}
+    attribute: current_temperature
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: 'return id(ui_mode) == 0 || id(ui_mode) == 15;'
+          then:
+            - script.execute: redraw
+  - platform: homeassistant
+    id: heat_target
+    entity_id: ${heat_entity}
+    attribute: temperature
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: 'return id(ui_mode) == 0 || id(ui_mode) == 15;'
+          then:
+            - script.execute: redraw
+  - platform: sht4x
+    i2c_id: i2c_sensor
+    address: 0x44
+    temperature:
+      name: "Hőmérséklet"
+      id: temp_sensor
+    humidity:
+      name: "Páratartalom"
+      id: hum_sensor
+    update_interval: 120s
+  - platform: template
+    id: battery_level
+    name: "Akkumulátor"
+    unit_of_measurement: "%"
+    device_class: battery
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 120s
+    lambda: |-
+      // BQ27220 töltöttségi szint (StateOfCharge), 0x2C parancs.
+      uint8_t reg = 0x2C;
+      uint8_t raw[2] = {0, 0};
+      auto err = id(i2c_sensor).write_readv(0x55, &reg, 1, raw, 2);
+      if (err != esphome::i2c::ERROR_OK) {
+        ESP_LOGW("battery", "BQ27220 SoC read failed, i2c error=%d", (int) err);
+        return NAN;
+      }
+      return static_cast<float>(static_cast<uint16_t>(raw[0]) |
+                               (static_cast<uint16_t>(raw[1]) << 8));
+  - platform: template
+    id: battery_voltage
+    name: "Akkumulátor feszültség"
+    unit_of_measurement: "mV"
+    device_class: voltage
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 120s
+    lambda: |-
+      uint8_t reg = 0x08;                      // feszültség (Voltage)
+      uint8_t raw[2] = {0, 0};
+      auto err = id(i2c_sensor).write_readv(0x55, &reg, 1, raw, 2);
+      if (err != esphome::i2c::ERROR_OK) return NAN;
+      return static_cast<float>(static_cast<uint16_t>(raw[0]) |
+                               (static_cast<uint16_t>(raw[1]) << 8));
+  - platform: template
+    id: battery_current
+    name: "Akkumulátor áram"
+    unit_of_measurement: "mA"
+    device_class: current
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 120s
+    lambda: |-
+      uint8_t reg = 0x0C;                      // átlagos áram (AverageCurrent), előjeles
+      uint8_t raw[2] = {0, 0};
+      auto err = id(i2c_sensor).write_readv(0x55, &reg, 1, raw, 2);
+      if (err != esphome::i2c::ERROR_OK) return NAN;
+      uint16_t v = static_cast<uint16_t>(raw[0]) | (static_cast<uint16_t>(raw[1]) << 8);
+      return static_cast<float>(static_cast<int16_t>(v));   // pozitív = tölt
+  # ---- 1. lámpa (1. csempe) adatai a lámpa oldalhoz ----
+  - platform: homeassistant
+    id: l1_bri
+    entity_id: ${tile1_entity}
+    attribute: brightness
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: 'return id(ui_mode) == 6 && id(light_page) == 0;'
+          then:
+            - script.execute: redraw
+  - platform: homeassistant
+    id: l1_ct
+    entity_id: ${tile1_entity}
+    attribute: color_temp_kelvin
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: 'return id(ui_mode) == 6 && id(light_page) == 0;'
+          then:
+            - script.execute: redraw
+  - platform: homeassistant
+    id: l1_ctmin
+    entity_id: ${tile1_entity}
+    attribute: min_color_temp_kelvin
+    internal: true
+  - platform: homeassistant
+    id: l1_ctmax
+    entity_id: ${tile1_entity}
+    attribute: max_color_temp_kelvin
+    internal: true
+  # ---- 2. lámpa (2. csempe) adatai a lámpa oldalhoz ----
+  - platform: homeassistant
+    id: l2_bri
+    entity_id: ${tile2_entity}
+    attribute: brightness
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: 'return id(ui_mode) == 6 && id(light_page) == 1;'
+          then:
+            - script.execute: redraw
+  - platform: homeassistant
+    id: l2_ct
+    entity_id: ${tile2_entity}
+    attribute: color_temp_kelvin
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: 'return id(ui_mode) == 6 && id(light_page) == 1;'
+          then:
+            - script.execute: redraw
+  - platform: homeassistant
+    id: l2_ctmin
+    entity_id: ${tile2_entity}
+    attribute: min_color_temp_kelvin
+    internal: true
+  - platform: homeassistant
+    id: l2_ctmax
+    entity_id: ${tile2_entity}
+    attribute: max_color_temp_kelvin
+    internal: true
+  # ---- 3. lámpa (3. csempe) adatai a lámpa oldalhoz ----
+  - platform: homeassistant
+    id: l3_bri
+    entity_id: ${tile3_entity}
+    attribute: brightness
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: 'return id(ui_mode) == 6 && id(light_page) == 2;'
+          then:
+            - script.execute: redraw
+  - platform: homeassistant
+    id: l3_ct
+    entity_id: ${tile3_entity}
+    attribute: color_temp_kelvin
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: 'return id(ui_mode) == 6 && id(light_page) == 2;'
+          then:
+            - script.execute: redraw
+  - platform: homeassistant
+    id: l3_ctmin
+    entity_id: ${tile3_entity}
+    attribute: min_color_temp_kelvin
+    internal: true
+  - platform: homeassistant
+    id: l3_ctmax
+    entity_id: ${tile3_entity}
+    attribute: max_color_temp_kelvin
+    internal: true
+  - platform: wifi_signal
+    name: "Wi-Fi jelerősség"
+    update_interval: 120s
+    entity_category: diagnostic
+
+# PDM mikrofon: bal csatorna, 16 bit, DC eltolás-javítással.
+microphone:
+  - platform: i2s_audio
+    id: onboard_mic
+    adc_type: external
+    pdm: true
+    i2s_din_pin: GPIO20
+    channel: left
+    bits_per_sample: 16bit
+    sample_rate: 16000
+    correct_dc_offset: true
+
+voice_assistant:
+  microphone: onboard_mic
+  use_wake_word: false
+  # ha halkan hall, ezekkel lehet kísérletezni:
+  # volume_multiplier: 2.0
+  # auto_gain: 31dBFS
+  # noise_suppression_level: 2
+  on_listening:
+    - logger.log:
+        level: WARN
+        format: "asszisztens: figyel"
+  on_stt_end:
+    - lambda: |-
+        id(last_heard) = x;
+        id(ui_mode) = 2;
+    - logger.log:
+        level: WARN
+        format: "asszisztens hallotta: '%s'"
+        args: ['x.c_str()']
+  on_tts_start:
+    - lambda: |-
+        id(last_reply) = x;
+        if (id(last_heard).empty()) id(last_heard) = "(nem hallottam semmit)";
+        id(ui_mode) = 3;
+    - script.execute: beep
+    - script.execute: redraw
+    - script.execute: back_to_menu
+  on_end:
+    - if:
+        condition:
+          lambda: 'return id(ui_mode) != 3;'
+        then:
+          - lambda: 'id(ui_mode) = 0;'
+          - script.execute: redraw
+  on_error:
+    - lambda: |-
+        id(last_reply) = std::string("Hiba – ") + message;
+        id(ui_mode) = 3;
+    - script.execute: redraw
+    - script.execute: back_to_menu
+
+# =============================================================================
+#  ÉRINTÉS – minden oldal koppintási zónái egy helyen. A zónák számát (t) a lenti
+#  műveletek kapják meg. A koordináták a rajzolással (display) egyeznek: ha egy
+#  oldalon átrendezed a gombokat, itt is igazítsd hozzá.
+# =============================================================================
+touchscreen:
+  - platform: gt911
+    i2c_id: i2c_touch
+    id: sticky_touch
+    interrupt_pin: GPIO21
+    reset_pin: GPIO41
+    display: eink
+    # Nincs transform – a tengelyeket az „Érintés tükrözés X/Y” kapcsolók javítják.
+    on_touch:
+      - lambda: |-
+          int rx = touch.x, ry = touch.y;
+          int x = rx, y = ry;
+          if (id(flip_x).state) x = 479 - x;
+          if (id(flip_y).state) y = 799 - y;
+          //  0–3 csempék   4 asszisztens / megszakítás   5 vissza   6 időjárás   7 fűtés sáv
+          //  10 TV be/ki  11 extra  16 forrás 1  12 forrás 2  13 forrás 3  14 halkít  15 hangosít
+          //  20 lámpa be/ki  21 fényerő sáv  22 színhő sáv
+          //  110 / 111 fűtés -/+   112–114 ki / fűtés / auto   115–117 gyors beállítások
+          int t = -1;
+          if (id(ui_mode) == 0) {
+            // menü
+            if      (y >=  64 && y <= 244) t = (x < 240) ? 0 : 1;
+            else if (y >= 256 && y <= 436) t = (x < 240) ? 2 : 3;
+            else if (y >= 448 && y <= 528) t = 7;
+            else if (y >= 542 && y <= 722) t = (x < 240) ? 4 : 6;
+          } else if (id(ui_mode) == 1 || id(ui_mode) == 2) {
+            t = 4;                                  // asszisztens: bárhol megszakítja
+          } else if (id(ui_mode) == 3) {
+            if (x >= 12 && x <= 468 && y >= 660 && y <= 752) t = 5;
+          } else if (id(ui_mode) == 5) {
+            // TV távirányító
+            int col = (x < 240) ? 0 : 1;
+            if      (y >=  72 && y <= 252) t = (x < 162) ? 10 : (x < 317) ? 11 : 16;
+            else if (y >= 264 && y <= 444) t = 12 + col;
+            else if (y >= 456 && y <= 636) t = 14 + col;
+            else if (y >= 660 && y <= 752) t = 5;
+          } else if (id(ui_mode) == 6) {
+            // lámpa oldal
+            if      (y >=  72 && y <= 252) t = 20;
+            else if (y >= 300 && y <= 420) t = 21;
+            else if (y >= 460 && y <= 580) t = 22;
+            else if (y >= 660 && y <= 752) t = 5;
+          } else if (id(ui_mode) == 14) {
+            t = 5;                                  // időjárás: bárhová koppintva vissza a menübe
+          } else if (id(ui_mode) == 15) {
+            // fűtés:  -  cél  +   /   ki  fűtés  auto   /   3 gyors beállítás
+            if      (y >= 186 && y <= 306) t = (x < 146) ? 110 : (x > 334) ? 111 : -1;
+            else if (y >= 320 && y <= 386) t = (x < 164) ? 112 : (x < 316) ? 113 : 114;
+            else if (y >= 400 && y <= 472) t = (x < 162) ? 115 : (x < 318) ? 116 : 117;
+          }
+          id(touch_x) = x;
+          id(hit_tile) = t;
+          ESP_LOGD("touch", "nyers=%d,%d  javított=%d,%d  oldal=%d  zóna=%d",
+                   rx, ry, x, y, id(ui_mode), t);
+      - lambda: 'id(awake_ms) = ${awake_after_button_ms};'
+      - script.execute: idle_timer
+      # menü csempék: elindul a hosszú nyomás figyelése. A rövid érintést az
+      # on_release kezeli (be/ki), a hosszú nyomás a részletes oldalt nyitja.
+      - if:
+          condition:
+            lambda: 'return id(ui_mode) == 0 && id(hit_tile) >= 0 && id(hit_tile) <= 3;'
+          then:
+            - script.execute: long_press
+      # asszisztens indítása / megszakítása
+      - if:
+          condition:
+            lambda: 'return id(hit_tile) == 4;'
+          then:
+            - if:
+                condition:
+                  lambda: 'return id(ui_mode) == 0;'
+                then:
+                  - script.execute: start_voice
+                else:
+                  - script.execute: beep
+                  - voice_assistant.stop:
+                  - script.stop: back_to_menu
+                  - lambda: 'id(ui_mode) = 0;'
+                  - script.execute: redraw
+      # VISSZA
+      - if:
+          condition:
+            lambda: 'return id(hit_tile) == 5;'
+          then:
+            - script.execute: go_back
+      # fűtés sáv a menüben → fűtés oldal
+      - if:
+          condition:
+            lambda: 'return id(hit_tile) == 7 && id(ui_mode) == 0;'
+          then:
+            - script.execute: beep
+            - lambda: 'id(ui_mode) = 15;'
+            - script.execute: redraw
+      # a fűtés oldal gombjai
+      - if:
+          condition:
+            lambda: 'return id(ui_mode) == 15 && id(hit_tile) >= 110 && id(hit_tile) <= 117;'
+          then:
+            - script.execute:
+                id: heat_touch
+                t: !lambda 'return id(hit_tile);'
+      # jobb alsó csempe → időjárás oldal (a TV távirányító: a 4. csempe hosszan)
+      - if:
+          condition:
+            lambda: 'return id(hit_tile) == 6 && id(ui_mode) == 0;'
+          then:
+            - script.execute: beep
+            - lambda: 'id(ui_mode) = 14;'
+            - script.execute: redraw
+      # TV távirányító gombjai
+      - if:
+          condition:
+            lambda: 'return id(ui_mode) == 5 && id(hit_tile) >= 10 && id(hit_tile) <= 16;'
+          then:
+            - script.execute:
+                id: tv_action
+                idx: !lambda 'return id(hit_tile);'
+      # lámpa oldal: be/ki
+      - if:
+          condition:
+            lambda: 'return id(ui_mode) == 6 && id(hit_tile) == 20;'
+          then:
+            - script.execute:
+                id: do_toggle
+                idx: !lambda 'return id(light_page);'
+      # lámpa oldal: fényerő / színhő sáv
+      - if:
+          condition:
+            lambda: 'return id(ui_mode) == 6 && (id(hit_tile) == 21 || id(hit_tile) == 22);'
+          then:
+            - script.execute:
+                id: light_set
+                kind: !lambda 'return id(hit_tile) - 21;'
+    # Ha az ujjad a hosszú nyomás ideje előtt felemeled = rövid érintés = be/ki.
+    on_release:
+      - if:
+          condition:
+            script.is_running: long_press
+          then:
+            - script.stop: long_press
+            - script.execute:
+                id: do_toggle
+                idx: !lambda 'return id(hit_tile);'
+
+# a csempék állapota a Home Assistantból (ettől lesz sötét a bekapcsolt csempe)
+binary_sensor:
+  - platform: homeassistant
+    id: st_tile1
+    entity_id: ${tile1_entity}
+    on_state:
+      - script.execute: redraw
+  - platform: homeassistant
+    id: st_tile2
+    entity_id: ${tile2_entity}
+    on_state:
+      - script.execute: redraw
+  - platform: homeassistant
+    id: st_tile3
+    entity_id: ${tile3_entity}
+    on_state:
+      - script.execute: redraw
+  - platform: homeassistant
+    id: st_tile4
+    entity_id: ${tile4_entity}
+    on_state:
+      - script.execute: redraw
+  # a TV távirányító oldal állapotai
+  - platform: homeassistant
+    id: st_tv_power
+    entity_id: ${tv_power_entity}
+    on_state:
+      - script.execute: redraw
+  - platform: homeassistant
+    id: st_tv_extra
+    entity_id: ${tv_extra_entity}
+    on_state:
+      - if:
+          condition:
+            lambda: 'return id(ui_mode) == 5;'
+          then:
+            - script.execute: redraw
+  # ---- fizikai gombok (ezek ébresztik fel mély alvásból is) ----
+  # Hogy melyik oldalon mit csinálnak, azt a btn_updown / btn_ok_short script dönti el.
+  - platform: gpio
+    pin:
+      number: GPIO5
+      mode: INPUT_PULLUP
+      inverted: true
+      allow_other_uses: true
+    id: btn_up
+    name: "Gomb FEL"
+    filters:
+      - delayed_on: 20ms
+    on_press:
+      - lambda: 'id(awake_ms) = ${awake_after_button_ms};'
+      - script.execute: idle_timer
+      - script.execute:
+          id: btn_updown
+          dir: -1
+  - platform: gpio
+    pin:
+      number: GPIO6
+      mode: INPUT_PULLUP
+      inverted: true
+      allow_other_uses: true
+    id: btn_down
+    name: "Gomb LE"
+    filters:
+      - delayed_on: 20ms
+    on_press:
+      - lambda: 'id(awake_ms) = ${awake_after_button_ms};'
+      - script.execute: idle_timer
+      - script.execute:
+          id: btn_updown
+          dir: 1
+  - platform: gpio
+    pin:
+      number: GPIO4
+      mode: INPUT_PULLUP
+      inverted: true
+      allow_other_uses: true
+    id: btn_ok
+    name: "Gomb OK"
+    filters:
+      - delayed_on: 20ms
+    on_press:
+      - lambda: 'id(awake_ms) = ${awake_after_button_ms};'
+      - script.execute: idle_timer
+    on_click:
+      # rövid nyomás: oldaltól függ
+      - min_length: 10ms
+        max_length: 700ms
+        then:
+          - script.execute: btn_ok_short
+
+text_sensor:
+  # ---- fűtés: mód (off / heat / auto), és hogy éppen fűt-e ----
+  - platform: homeassistant
+    id: heat_mode
+    entity_id: ${heat_entity}
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: 'return id(ui_mode) == 0 || id(ui_mode) == 15;'
+          then:
+            - script.execute: redraw
+  # a 24 órás fűtés előzmény (lásd sticky_futes_elozmeny_ha.yaml)
+  - platform: homeassistant
+    id: heat_hist
+    entity_id: ${heat_history_entity}
+    attribute: pontok
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: 'return id(ui_mode) == 15;'
+          then:
+            - script.execute: redraw
+  - platform: homeassistant
+    id: heat_action
+    entity_id: ${heat_entity}
+    attribute: hvac_action
+    internal: true
+    on_value:
+      - if:
+          condition:
+            lambda: 'return id(ui_mode) == 15;'
+          then:
+            - script.execute: redraw
+  # becsomagolt időjárás szöveg a Home Assistantból (lásd sticky_idojaras_ha.yaml)
+  - platform: homeassistant
+    id: st_weather
+    entity_id: ${weather_entity}
+    on_value:
+      - if:
+          condition:
+            lambda: 'return id(ui_mode) == 14;'
+          then:
+            - script.execute: redraw
+
+script:
+  # EGYETLEN út a képernyőre. Sorba áll, és a végén vár, amíg a (több másodperces)
+  # frissítés tényleg befejeződik – így két rajzolás sosem akad össze.
+  - id: redraw
+    mode: queued
+    max_runs: 2
+    then:
+      # Rövid várakozás: összevonja a gyorsan egymás után érkező változásokat,
+      # de az oldalváltás még azonnalinak tűnik.
+      - delay: 200ms
+      - logger.log:
+          level: WARN
+          format: "RAJZOLÁS  oldal=%d c1=%d c2=%d c3=%d c4=%d"
+          args:
+            - id(ui_mode)
+            - id(st_tile1).state
+            - id(st_tile2).state
+            - id(st_tile3).state
+            - id(st_tile4).state
+      - component.update: eink
+      # A sor tartása, amíg a panel végez. Egy teljes frissítés kb. 1–2 mp.
+      # Ha a naplóban „Display already in state ...” hiba jelenik meg, emeld 4s-ra.
+      - delay: 3s
+
+  # Az asszisztens indítása. A „figyelek” képernyőt a mikrofon bekapcsolása ELŐTT
+  # rajzolja ki, hogy a frissítés ne akassza meg a hangfelvételt.
+  - id: start_voice
+    mode: single
+    then:
+      - output.ledc.set_frequency:
+          id: buzzer_pwm
+          frequency: 1800Hz
+      - light.turn_on:
+          id: buzzer
+          brightness: 45%
+      - delay: 35ms
+      - light.turn_off: buzzer
+      - script.stop: redraw
+      - lambda: |-
+          id(ui_mode) = 1;
+          id(last_heard) = "";
+          id(last_reply) = "";
+      - component.update: eink
+      - delay: 250ms
+      - output.ledc.set_frequency:
+          id: buzzer_pwm
+          frequency: 3200Hz
+      - light.turn_on:
+          id: buzzer
+          brightness: 70%
+      - delay: 55ms
+      - light.turn_off: buzzer
+      - delay: 55ms
+      - light.turn_on:
+          id: buzzer
+          brightness: 70%
+      - delay: 55ms
+      - light.turn_off: buzzer
+      - output.ledc.set_frequency:
+          id: buzzer_pwm
+          frequency: 2700Hz
+      - delay: 150ms
+      - voice_assistant.start:
+
+  - id: open_remote
+    mode: single
+    then:
+      - script.execute: beep
+      - lambda: 'id(ui_mode) = 5;'
+      - script.execute: redraw
+
+  # Hosszú nyomás egy csempén: ha az ujj 600 ms után is lent van, megnyílik a csempe
+  # részletes oldala. Rövid érintésnél az on_release még előtte leállítja.
+  - id: long_press
+    mode: restart
+    then:
+      - delay: 600ms
+      - if:
+          condition:
+            lambda: 'return id(hit_tile) >= 0 && id(hit_tile) <= 2;'
+          then:
+            - script.execute:
+                id: open_light
+                page: !lambda 'return id(hit_tile);'
+          else:
+            - script.execute: open_remote
+
+  # Egy lámpa oldal megnyitása. Körbeér: -1 → 2, 3 → 0.
+  - id: open_light
+    mode: restart
+    parameters:
+      page: int
+    then:
+      - script.execute: beep
+      - lambda: |-
+          id(light_page) = ((page % 3) + 3) % 3;
+          id(ui_mode) = 6;
+      - script.execute: redraw
+
+  # Fényerő (kind 0) vagy színhőmérséklet (kind 1) beállítása aszerint, hol érintetted
+  # meg a sávot. Bal szél = halvány / meleg, jobb szél = fényes / hideg.
+  # Itt nincs újrarajzolás: a Home Assistantból érkező új állapot frissíti az oldalt.
+  - id: light_set
+    mode: queued
+    max_runs: 3
+    parameters:
+      kind: int
+    then:
+      - script.execute: beep
+      - if:
+          condition:
+            lambda: 'return kind == 0;'
+          then:
+            - homeassistant.action:
+                action: light.turn_on
+                data:
+                  entity_id: !lambda |-
+                    int p = id(light_page);
+                    return std::string(p == 0 ? "${tile1_entity}" : p == 1 ? "${tile2_entity}" : "${tile3_entity}");
+                  brightness_pct: !lambda |-
+                    float f = (id(touch_x) - 15) / 450.0f;
+                    if (f < 0) f = 0;
+                    if (f > 1) f = 1;
+                    int pct = (int) roundf(f * 100.0f);
+                    if (pct < 1) pct = 1;
+                    return std::to_string(pct);
+      - if:
+          condition:
+            lambda: |-
+              if (kind != 1) return false;
+              int p = id(light_page);
+              float mn = p == 0 ? id(l1_ctmin).state : p == 1 ? id(l2_ctmin).state : id(l3_ctmin).state;
+              float mx = p == 0 ? id(l1_ctmax).state : p == 1 ? id(l2_ctmax).state : id(l3_ctmax).state;
+              return !isnan(mn) && !isnan(mx) && mx > mn;
+          then:
+            - homeassistant.action:
+                action: light.turn_on
+                data:
+                  entity_id: !lambda |-
+                    int p = id(light_page);
+                    return std::string(p == 0 ? "${tile1_entity}" : p == 1 ? "${tile2_entity}" : "${tile3_entity}");
+                  color_temp_kelvin: !lambda |-
+                    int p = id(light_page);
+                    float mn = p == 0 ? id(l1_ctmin).state : p == 1 ? id(l2_ctmin).state : id(l3_ctmin).state;
+                    float mx = p == 0 ? id(l1_ctmax).state : p == 1 ? id(l2_ctmax).state : id(l3_ctmax).state;
+                    float f = (id(touch_x) - 15) / 450.0f;
+                    if (f < 0) f = 0;
+                    if (f > 1) f = 1;
+                    return std::to_string((int) roundf(mn + f * (mx - mn)));
+
+  # TV távirányító műveletek. Sorba áll, hogy a gyors hangerő-nyomások se vesszenek el.
+  # Itt nincs újrarajzolás: a hangerőnek nincs mit mutatnia, a BE/KI és az EXTRA
+  # pedig magától frissül, amikor a Home Assistant jelzi az új állapotot.
+  - id: tv_action
+    mode: queued
+    max_runs: 5
+    parameters:
+      idx: int
+    then:
+      - script.execute: beep
+      - if:
+          condition:
+            lambda: 'return idx == 10;'
+          then:
+            - homeassistant.action:
+                action: homeassistant.toggle
+                data:
+                  entity_id: ${tv_power_entity}
+      - if:
+          condition:
+            lambda: 'return idx == 11;'
+          then:
+            - homeassistant.action:
+                action: homeassistant.toggle
+                data:
+                  entity_id: ${tv_extra_entity}
+      - if:
+          condition:
+            lambda: 'return idx == 16;'
+          then:
+            - homeassistant.action:
+                action: media_player.select_source
+                data:
+                  entity_id: ${tv_media_player}
+                  source: "${tv_src1_source}"
+      - if:
+          condition:
+            lambda: 'return idx == 12;'
+          then:
+            - homeassistant.action:
+                action: media_player.select_source
+                data:
+                  entity_id: ${tv_media_player}
+                  source: "${tv_src2_source}"
+      - if:
+          condition:
+            lambda: 'return idx == 13;'
+          then:
+            - homeassistant.action:
+                action: media_player.select_source
+                data:
+                  entity_id: ${tv_media_player}
+                  source: "${tv_src3_source}"
+      - if:
+          condition:
+            lambda: 'return idx == 14;'
+          then:
+            - homeassistant.action:
+                action: media_player.volume_down
+                data:
+                  entity_id: ${tv_media_player}
+      - if:
+          condition:
+            lambda: 'return idx == 15;'
+          then:
+            - homeassistant.action:
+                action: media_player.volume_up
+                data:
+                  entity_id: ${tv_media_player}
+
+  # ---------------------------------------------------------------------------
+  #  Fizikai gombok
+  # ---------------------------------------------------------------------------
+  # OK rövid nyomás: a menüben az asszisztens, minden más oldalon vissza a menübe.
+  - id: btn_ok_short
+    mode: single
+    then:
+      - lambda: 'id(btn_mode) = id(ui_mode);'
+      - if:
+          condition:
+            lambda: 'return id(btn_mode) == 0;'
+          then:
+            - script.execute: start_voice
+      - if:
+          condition:
+            lambda: 'int m = id(btn_mode); return m == 3 || m == 5 || m == 6 || m == 14 || m == 15;'
+          then:
+            - script.execute: go_back
+      - if:
+          condition:
+            lambda: 'return id(btn_mode) == 1 || id(btn_mode) == 2;'
+          then:
+            - script.execute: beep
+
+  # FEL (dir -1) / LE (dir +1), oldalanként.
+  - id: btn_updown
+    mode: queued
+    max_runs: 3
+    parameters:
+      dir: int
+    then:
+      - lambda: 'id(btn_mode) = id(ui_mode);'
+      # TV távirányító: hangerő
+      - if:
+          condition:
+            lambda: 'return id(btn_mode) == 5;'
+          then:
+            - script.execute:
+                id: tv_action
+                idx: !lambda 'return dir < 0 ? 15 : 14;'
+      # időjárás oldal: vissza a menübe
+      - if:
+          condition:
+            lambda: 'return id(btn_mode) == 14;'
+          then:
+            - script.execute: go_back
+      # fűtés: FEL = melegebb, LE = hűvösebb (0,5 fok)
+      - if:
+          condition:
+            lambda: 'return id(btn_mode) == 15;'
+          then:
+            - script.execute:
+                id: heat_touch
+                t: !lambda 'return dir < 0 ? 111 : 110;'
+      # menü / lámpa oldalak: lapozás a lámpák között
+      - if:
+          condition:
+            lambda: 'return id(btn_mode) == 0 || id(btn_mode) == 6;'
+          then:
+            - script.execute:
+                id: open_light
+                page: !lambda 'return id(btn_mode) == 0 ? (dir < 0 ? 2 : 0) : id(light_page) + dir;'
+      # asszisztens oldalak: csak frissít
+      - if:
+          condition:
+            lambda: 'int m = id(btn_mode); return m == 1 || m == 2 || m == 3;'
+          then:
+            - script.execute: beep
+            - script.execute: redraw
+
+  # ---------------------------------------------------------------------------
+  #  Alvás
+  # ---------------------------------------------------------------------------
+  # Az ébren töltött idő számlálója: minden érintés / gombnyomás újraindítja.
+  - id: idle_timer
+    mode: restart
+    then:
+      - logger.log:
+          level: WARN
+          format: "alvás időzítő: %d ms"
+          args: ['id(awake_ms)']
+      - delay: !lambda 'return id(awake_ms);'
+      - logger.log:
+          level: WARN
+          format: "lejárt az idő – elalvás"
+      - script.execute: go_to_sleep
+
+  - id: go_to_sleep
+    mode: single
+    then:
+      - if:
+          condition:
+            lambda: 'return std::string("${low_power}") != "true";'
+          then:
+            - logger.log:
+                level: WARN
+                format: "NEM alszik – a low_power ki van kapcsolva"
+          else:
+            # Elalvás előtt mindig az időjárás képernyő (vagy, ha nincs adat, a menü)
+            # kerül ki a holddal. Megvárja, amíg a frissítés véget ér, és csak utána alszik el.
+            - lambda: |-
+                id(sleeping) = true;
+                std::string w = id(st_weather).state;
+                id(ui_mode) = (!w.empty() && w != "unknown" && w != "unavailable") ? 14 : 0;
+            - script.stop: redraw
+            - component.update: eink
+            - logger.log:
+                level: WARN
+                format: "a kijelzőre vár az elalvás előtt"
+            - delay: 10s
+            - output.turn_off: mic_power_enable
+            - switch.turn_off: touch_power_enable
+            - logger.log:
+                level: WARN
+                format: "alszik"
+            - delay: 200ms
+            # A tápfeszültség-retesz (GPIO45/46) tartása a mély alvás alatt.
+            - lambda: |-
+                gpio_hold_en((gpio_num_t) 45);
+                gpio_hold_en((gpio_num_t) 46);
+                gpio_deep_sleep_hold_en();
+            - deep_sleep.allow: sleeper
+            - deep_sleep.enter: sleeper
+
+  # Rövid visszajelző csippanás érintésre / gombnyomásra.
+  - id: beep
+    mode: restart
+    then:
+      - light.turn_on:
+          id: buzzer
+          brightness: 60%
+      - delay: 40ms
+      - light.turn_off: buzzer
+
+  # ---------------------------------------------------------------------------
+  #  Fűtés
+  # ---------------------------------------------------------------------------
+  # 110 / 111: -0,5 / +0,5 fok   112–114: ki / fűtés / auto   115–117: gyors beállítások
+  - id: heat_touch
+    mode: queued
+    max_runs: 4
+    parameters:
+      t: int
+    then:
+      - script.execute: beep
+      - if:
+          condition:
+            lambda: 'return t >= 112 && t <= 114;'
+          then:
+            - homeassistant.action:
+                action: climate.set_hvac_mode
+                data:
+                  entity_id: ${heat_entity}
+                  hvac_mode: !lambda 'return std::string(t == 112 ? "off" : t == 113 ? "heat" : "auto");'
+          else:
+            - lambda: |-
+                float base = !isnan(id(heat_set)) ? id(heat_set) : id(heat_target).state;
+                if (isnan(base)) base = 21.0f;
+                float v = base;
+                if (t == 110) v = base - 0.5f;
+                else if (t == 111) v = base + 0.5f;
+                else if (t == 115) v = atof("${heat_preset1}");
+                else if (t == 116) v = atof("${heat_preset2}");
+                else if (t == 117) v = atof("${heat_preset3}");
+                v = roundf(v * 2.0f) / 2.0f;
+                if (v < 5.0f) v = 5.0f;
+                if (v > 30.0f) v = 30.0f;
+                id(heat_set) = v;
+            - script.execute: redraw
+            - script.execute: heat_send
+
+  # az utolsó nyomás után 1,5 mp-cel küldi el a célt (több nyomásból így egy változás lesz)
+  - id: heat_send
+    mode: restart
+    then:
+      - delay: 1500ms
+      - homeassistant.action:
+          action: climate.set_temperature
+          data:
+            entity_id: ${heat_entity}
+            temperature: !lambda |-
+              char b[8];
+              snprintf(b, sizeof(b), "%.1f", id(heat_set));
+              return std::string(b);
+      # kicsivel később a Home Assistant visszajelzi az új célt; onnantól újra azt követi
+      - delay: 4s
+      - lambda: 'id(heat_set) = NAN;'
+
+  - id: go_back
+    mode: single
+    then:
+      - script.execute: beep
+      - script.stop: back_to_menu
+      - lambda: |-
+          id(ui_mode) = 0;
+          id(last_heard) = "";
+          id(last_reply) = "";
+      - script.execute: redraw
+
+  # Biztonsági háló: ne maradjon kint örökre egy régi asszisztens-válasz.
+  - id: back_to_menu
+    mode: restart
+    then:
+      - delay: 3min
+      - lambda: |-
+          id(ui_mode) = 0;
+          id(last_heard) = "";
+          id(last_reply) = "";
+      - script.execute: redraw
+
+  # a homeassistant.toggle bármilyen be/ki kapcsolható entitással működik: light, switch, input_boolean...
+  - id: do_toggle
+    mode: single
+    parameters:
+      idx: int
+    then:
+      - script.execute: beep
+      - if:
+          condition:
+            lambda: 'return idx == 0;'
+          then:
+            - homeassistant.action:
+                action: homeassistant.toggle
+                data:
+                  entity_id: ${tile1_entity}
+      - if:
+          condition:
+            lambda: 'return idx == 1;'
+          then:
+            - homeassistant.action:
+                action: homeassistant.toggle
+                data:
+                  entity_id: ${tile2_entity}
+      - if:
+          condition:
+            lambda: 'return idx == 2;'
+          then:
+            - homeassistant.action:
+                action: homeassistant.toggle
+                data:
+                  entity_id: ${tile3_entity}
+      - if:
+          condition:
+            lambda: 'return idx == 3;'
+          then:
+            - homeassistant.action:
+                action: homeassistant.toggle
+                data:
+                  entity_id: ${tile4_entity}
+
+# =============================================================================
+#  KIJELZŐ – minden oldal rajzolása egy helyen. A koordináták a 480×800-as
+#  álló képernyőre vonatkoznak; a koppintási zónák a touchscreen részben vannak.
+# =============================================================================
+display:
+  - platform: epaper_spi
+    id: eink
+    model: seeed-reterminal-sticky
+    rotation: 90
+    # Mindig teljes frissítés; a rajzolást kizárólag a redraw script indítja.
+    update_interval: never
+    lambda: |-
+      // Ezen a panelen a COLOR_OFF a TINTA (fekete), a COLOR_ON a PAPÍR (világos).
+      const Color INK   = COLOR_OFF;
+      const Color PAPER = COLOR_ON;
+      const int W = 480;
+      const int H = 800;
+      // keretes doboz t pixel vastag szegéllyel
+      auto thick_box = [&](int x, int y, int w, int h, int t) {
+        for (int i = 0; i < t; i++) it.rectangle(x + i, y + i, w - 2*i, h - 2*i, INK);
+      };
+      // Szöveg tördelése legfeljebb maxc karakteres sorokra, szóközöknél.
+      auto wrap = [](std::string s, size_t maxc) {
+        std::vector<std::string> out;
+        while (!s.empty() && out.size() < 10) {
+          size_t cut = s.size();
+          if (s.size() > maxc) {
+            size_t sp = s.rfind(' ', maxc);
+            cut = (sp == std::string::npos || sp == 0) ? maxc : sp;
+          }
+          out.push_back(s.substr(0, cut));
+          s = (cut < s.size()) ? s.substr(cut) : std::string("");
+          while (!s.empty() && s[0] == ' ') s.erase(0, 1);
+        }
+        return out;
+      };
+      // ======================= FEJLÉC =======================
+      // Óra nincs benne: 4 órás ébredési ciklus mellett elavult időt mutatna.
+      // Bal felül az oldal címe (a menüben az eszköz neve).
+      if (id(ui_mode) == 0) {
+        it.print(14, 10, id(f_body), INK, TextAlign::TOP_LEFT, "${friendly_name}");
+      } else if (id(ui_mode) == 5) {
+        it.print(14, 10, id(f_body), INK, TextAlign::TOP_LEFT, "TV");
+      } else if (id(ui_mode) == 15) {
+        it.print(14, 10, id(f_body), INK, TextAlign::TOP_LEFT, "${heat_label}");
+      } else if (id(ui_mode) == 14) {
+        // időjárás: a mai dátum (az RTC órából)
+        auto tn = id(rtc_time).now();
+        if (tn.is_valid()) {
+          static const char *DAYS[] = {"", "Vasárnap", "Hétfő", "Kedd", "Szerda", "Csütörtök", "Péntek", "Szombat"};
+          static const char *MONTHS[] = {"", "jan.", "febr.", "márc.", "ápr.", "máj.", "jún.",
+                                         "júl.", "aug.", "szept.", "okt.", "nov.", "dec."};
+          it.printf(14, 10, id(f_body), INK, TextAlign::TOP_LEFT, "%s, %s %d.",
+                    DAYS[tn.day_of_week], MONTHS[tn.month], tn.day_of_month);
+        }
+      }
+      // ---- akkumulátor jelző ----
+      {
+        const int bx = W - 62, by = 13, bw = 44, bh = 22;
+        it.rectangle(bx, by, bw, bh, INK);
+        it.filled_rectangle(bx + bw, by + 7, 4, 8, INK);
+        float pct = id(battery_level).state;
+        if (!isnan(pct)) {
+          if (pct < 0) pct = 0;
+          if (pct > 100) pct = 100;
+          int fill = (int) ((bw - 6) * pct / 100.0f);
+          if (fill > 0) it.filled_rectangle(bx + 3, by + 3, fill, bh - 6, INK);
+          it.printf(bx - 8, 10, id(f_body), INK, TextAlign::TOP_RIGHT, "%.0f%%", pct);
+        } else {
+          it.print(bx - 8, 10, id(f_body), INK, TextAlign::TOP_RIGHT, "--");
+        }
+        // töltés jel (villám)
+        if (!isnan(id(battery_current).state) && id(battery_current).state > 20.0f) {
+          int cx = bx - 78, cy = 13;
+          it.line(cx + 8, cy,      cx + 2, cy + 11, INK);
+          it.line(cx + 2, cy + 11, cx + 9, cy + 11, INK);
+          it.line(cx + 9, cy + 11, cx + 3, cy + 22, INK);
+        }
+      }
+      // ---- alvás jelzés: hold a fejléc közepén ----
+      if (id(sleeping)) {
+        // az időjárás oldalon a dátum hosszú, ezért ott a hold az akkumulátor elé kerül
+        it.image(id(ui_mode) == 14 ? 300 : W / 2 - 14, 10, id(ic_sleep), INK, PAPER);
+      }
+      it.filled_rectangle(14, 48, W - 28, 2, INK);
+      // ======================== MENÜ ========================
+      if (id(ui_mode) == 0) {
+        const int TW = 222, TH = 180;
+        const int tx[4] = { 12, 246,  12, 246};
+        const int ty[4] = { 64,  64, 256, 256};
+        const char* names[4] = {"${tile1_label}", "${tile2_label}",
+                                "${tile3_label}", "${tile4_label}"};
+        bool on[4];
+        on[0] = id(st_tile1).state;
+        on[1] = id(st_tile2).state;
+        on[2] = id(st_tile3).state;
+        on[3] = id(st_tile4).state;
+        const char* states[4];
+        for (int i = 0; i < 4; i++) states[i] = on[i] ? "BE" : "KI";
+        for (int i = 0; i < 4; i++) {
+          int x = tx[i], y = ty[i];
+          bool inv = on[i];
+          // BE = tele fekete csempe, világos tartalommal
+          // KI = világos csempe 3 px-es fekete kerettel, fekete tartalommal
+          Color fg = inv ? PAPER : INK;
+          Color bg = inv ? INK   : PAPER;
+          if (inv) {
+            it.filled_rectangle(x, y, TW, TH, INK);
+          } else {
+            thick_box(x, y, TW, TH, 3);
+          }
+          int ix = x + (TW - 96) / 2;
+          switch (i) {
+            case 0: it.image(ix, y + 10, id(ic_tile1), fg, bg); break;
+            case 1: it.image(ix, y + 10, id(ic_tile2), fg, bg); break;
+            case 2: it.image(ix, y + 10, id(ic_tile3), fg, bg); break;
+            case 3: it.image(ix, y + 10, id(ic_tile4), fg, bg); break;
+          }
+          it.printf(x + TW/2, y + 110, id(f_tile), fg, TextAlign::TOP_CENTER,
+                    "%s", names[i]);
+          it.printf(x + TW/2, y + 146, id(f_state), fg, TextAlign::TOP_CENTER,
+                    "%s", states[i]);
+        }
+        // ---- fűtés sáv: középre igazítva, fűtés közben sötét ----
+        {
+          float room = id(heat_cur).state;
+          float tgt = !isnan(id(heat_set)) ? id(heat_set) : id(heat_target).state;
+          std::string mode = id(heat_mode).state;
+          bool heating = id(heat_action).state == "heating";
+          char b1[40], b2[64];
+          if (isnan(room)) snprintf(b1, sizeof(b1), "${heat_label}");
+          else snprintf(b1, sizeof(b1), "${heat_label}   %.1f°", room);
+          if (mode == "off") snprintf(b2, sizeof(b2), "kikapcsolva");
+          else if (isnan(tgt)) snprintf(b2, sizeof(b2), "nincs adat");
+          else snprintf(b2, sizeof(b2), "cél %.1f°   %s", tgt, heating ? "most fűt" : "nem fűt");
+          for (char *q = b1; *q; q++) if (*q == '.') *q = ',';
+          for (char *q = b2; *q; q++) if (*q == '.') *q = ',';
+          Color fg = heating ? PAPER : INK, bg = heating ? INK : PAPER;
+          if (heating) it.filled_rectangle(12, 448, 456, 80, INK);
+          else         thick_box(12, 448, 456, 80, 3);
+          // az ikon és a két sor egy csoportként, a sáv közepén
+          int bx, by, w1, h1, w2, h2;
+          it.get_text_bounds(0, 0, b1, id(f_tile), TextAlign::TOP_LEFT, &bx, &by, &w1, &h1);
+          it.get_text_bounds(0, 0, b2, id(f_small), TextAlign::TOP_LEFT, &bx, &by, &w2, &h2);
+          int gw = 56 + 16 + std::max(w1, w2);
+          int gx = (W - gw) / 2;
+          it.image(gx, 460, id(ic_heat), fg, bg);
+          it.print(gx + 72, 458, id(f_tile), fg, TextAlign::TOP_LEFT, b1);
+          it.print(gx + 72, 494, id(f_small), fg, TextAlign::TOP_LEFT, b2);
+        }
+        // ---- alsó sor: bal oldalt az asszisztens, jobb oldalt az időjárás ----
+        thick_box(12, 542, 222, 180, 3);
+        it.image(91, 566, id(ic_mic), INK, PAPER);
+        it.print(123, 648, id(f_tile), INK, TextAlign::TOP_CENTER, "${voice_label}");
+        thick_box(246, 542, 222, 180, 3);
+        {
+          // a mostani idő ikonja és hőmérséklete (a Home Assistantból), ha van adat
+          std::string w = id(st_weather).state;
+          std::string c = w.substr(0, w.find('|'));
+          int temp = 0; bool have = false;
+          size_t a = w.find('|');
+          if (a != std::string::npos && !c.empty() && c != "unknown" && c != "unavailable") {
+            temp = atoi(w.c_str() + a + 1); have = true;
+          }
+          esphome::image::Image *ic =
+              c == "sunny" ? id(ws_sunny) : c == "clear-night" ? id(ws_night) : c == "partlycloudy" ? id(ws_partly) :
+              c == "cloudy" ? id(ws_cloudy) : c == "fog" ? id(ws_fog) : c == "rainy" ? id(ws_rainy) :
+              c == "pouring" ? id(ws_pouring) : (c == "lightning" || c == "lightning-rainy") ? id(ws_storm) :
+              (c == "snowy" || c == "snowy-rainy" || c == "hail") ? id(ws_snowy) :
+              (c == "windy" || c == "windy-variant") ? id(ws_windy) : id(ws_partly);
+          if (have) {
+            it.image(270, 560, ic, INK, PAPER);
+            it.printf(450, 572, id(f_head), INK, TextAlign::TOP_RIGHT, "%d°", temp);
+          } else {
+            it.image(321, 560, ic, INK, PAPER);
+          }
+          it.print(357, 648, id(f_tile), INK, TextAlign::TOP_CENTER, "${weather_label}");
+        }
+        // ---- lábléc ----
+        if (id(temp_sensor).has_state()) {
+          it.printf(14, H - 16, id(f_small), INK, TextAlign::BASELINE_LEFT,
+                    "%.1f °C", id(temp_sensor).state);
+        }
+        it.print(W - 14, H - 16, id(f_small), INK, TextAlign::BASELINE_RIGHT,
+                 "${footer_text}");
+        if (std::string("${low_power}") != "true") {
+          it.print(W / 2, H - 16, id(f_small), INK, TextAlign::BASELINE_CENTER,
+                   "always on");
+        }
+      }
+      // =================== ASSZISZTENS: FIGYEL ==============
+      else if (id(ui_mode) == 1) {
+        it.image(160, 200, id(ic_listening), INK, PAPER);
+        it.print(240, 400, id(f_head), INK, TextAlign::TOP_CENTER, "Figyelek...");
+        it.print(240, 452, id(f_body), INK, TextAlign::TOP_CENTER, "mondd, mit szeretnél");
+        it.filled_rectangle(60, 560, 360, 8, INK);
+        it.print(240, 700, id(f_small), INK, TextAlign::TOP_CENTER,
+                 "koppints bárhová a megszakításhoz");
+      }
+      // ================= ASSZISZTENS: GONDOLKODIK ===========
+      else if (id(ui_mode) == 2) {
+        it.image(160, 200, id(ic_thinking), INK, PAPER);
+        it.print(240, 400, id(f_head), INK, TextAlign::TOP_CENTER, "Gondolkodom...");
+        if (!id(last_heard).empty()) {
+          it.printf(240, 456, id(f_body), INK, TextAlign::TOP_CENTER,
+                    "\"%s\"", id(last_heard).c_str());
+        }
+      }
+      // ===================== TV TÁVIRÁNYÍTÓ =================
+      else if (id(ui_mode) == 5) {
+        // 1. sor: három keskenyebb gomb. 2–3. sor: két-két széles gomb.
+        // A helyük egyezzen a touchscreen részben lévő zónákkal.
+        const int TH = 180;
+        const int bx[7] = { 12, 167, 322,  12, 246,  12, 246};
+        const int by[7] = { 72,  72,  72, 264, 264, 456, 456};
+        const int bw[7] = {146, 146, 146, 222, 222, 222, 222};
+        // 0 be/ki, 1 extra, 2 forrás 1, 3 forrás 2, 4 forrás 3, 5 halkít, 6 hangosít
+        const char* lbl[7] = {"BE / KI", "${tv_extra_label}", "${tv_src1_label}", "${tv_src2_label}",
+                              "${tv_src3_label}", "HALKÍT", "HANGOSÍT"};
+        bool inv[7] = {(bool) id(st_tv_power).state, (bool) id(st_tv_extra).state,
+                       false, false, false, false, false};
+        for (int i = 0; i < 7; i++) {
+          int x = bx[i], y = by[i], w = bw[i];
+          Color fg = inv[i] ? PAPER : INK;
+          Color bg = inv[i] ? INK   : PAPER;
+          if (inv[i]) {
+            it.filled_rectangle(x, y, w, TH, INK);
+          } else {
+            thick_box(x, y, w, TH, 3);
+          }
+          int ix = x + (w - 80) / 2;
+          switch (i) {
+            case 0: it.image(ix, y + 22, id(ic_power),     fg, bg); break;
+            case 1: it.image(ix, y + 22, id(ic_tv_extra), fg, bg); break;
+            case 2: it.image(ix, y + 22, id(ic_src1),      fg, bg); break;
+            case 3: it.image(ix, y + 22, id(ic_src2),      fg, bg); break;
+            case 4: it.image(ix, y + 22, id(ic_src3),      fg, bg); break;
+            case 5: it.image(ix, y + 22, id(ic_vol_down),  fg, bg); break;
+            case 6: it.image(ix, y + 22, id(ic_vol_up),    fg, bg); break;
+          }
+          // a keskeny felső sorban kisebb betű, hogy a hosszabb felirat is kiférjen
+          auto f = (i < 3) ? id(f_state) : id(f_tile);
+          it.print(x + w / 2, y + 122, f, fg, TextAlign::TOP_CENTER, lbl[i]);
+        }
+        // VISSZA: teljes szélességben. A helye egyezzen a touchscreen zónával.
+        it.filled_rectangle(12, 660, 456, 92, INK);
+        it.image(140, 686, id(ic_back), PAPER, INK);
+        it.print(196, 684, id(f_head), PAPER, TextAlign::TOP_LEFT, "VISSZA");
+      }
+      // ======================= LÁMPA OLDAL ==================
+      else if (id(ui_mode) == 6) {
+        const int p = id(light_page);
+        const char* nm = p == 0 ? "${tile1_label}" : p == 1 ? "${tile2_label}" : "${tile3_label}";
+        bool  on  = p == 0 ? id(st_tile1).state : p == 1 ? id(st_tile2).state : id(st_tile3).state;
+        float bri = p == 0 ? id(l1_bri).state   : p == 1 ? id(l2_bri).state   : id(l3_bri).state;
+        float ct  = p == 0 ? id(l1_ct).state    : p == 1 ? id(l2_ct).state    : id(l3_ct).state;
+        float mn  = p == 0 ? id(l1_ctmin).state : p == 1 ? id(l2_ctmin).state : id(l3_ctmin).state;
+        float mx  = p == 0 ? id(l1_ctmax).state : p == 1 ? id(l2_ctmax).state : id(l3_ctmax).state;
+        // oldalszámláló bal felül, a fejlécben
+        it.printf(14, 10, id(f_body), INK, TextAlign::TOP_LEFT, "%d / 3", p + 1);
+        // ---- be/ki: teljes szélességű gomb (a helye egyezzen a touchscreen zónával) ----
+        Color fg = on ? PAPER : INK;
+        Color bg = on ? INK   : PAPER;
+        if (on) {
+          it.filled_rectangle(12, 72, 456, 180, INK);
+        } else {
+          thick_box(12, 72, 456, 180, 3);
+        }
+        switch (p) {
+          case 0: it.image(40, 114, id(ic_tile1), fg, bg); break;
+          case 1: it.image(40, 114, id(ic_tile2), fg, bg); break;
+          case 2: it.image(40, 114, id(ic_tile3), fg, bg); break;
+        }
+        it.print(164, 112, id(f_head), fg, TextAlign::TOP_LEFT, nm);
+        it.print(164, 162, id(f_tile), fg, TextAlign::TOP_LEFT, on ? "BE" : "KI");
+        // ---- fényerő sáv: balról töltődik ----
+        int pct = (on && !isnan(bri)) ? (int) roundf(bri * 100.0f / 255.0f) : 0;
+        it.print(12, 284, id(f_tile), INK, TextAlign::TOP_LEFT, "Fényerő");
+        it.printf(468, 284, id(f_tile), INK, TextAlign::TOP_RIGHT, "%d%%", pct);
+        thick_box(12, 324, 456, 72, 3);
+        int fw = (int) (450 * pct / 100.0f);
+        if (fw > 0) it.filled_rectangle(15, 327, fw, 66, INK);
+        // ---- színhő sáv: jelölő, balra meleg, jobbra hideg ----
+        bool ct_ok = !isnan(mn) && !isnan(mx) && mx > mn;
+        it.print(12, 444, id(f_tile), INK, TextAlign::TOP_LEFT, "Színhőmérséklet");
+        if (!ct_ok) {
+          it.print(468, 450, id(f_state), INK, TextAlign::TOP_RIGHT, "nem állítható");
+        } else if (on && !isnan(ct)) {
+          it.printf(468, 444, id(f_tile), INK, TextAlign::TOP_RIGHT, "%.0f K", ct);
+        } else {
+          it.print(468, 444, id(f_tile), INK, TextAlign::TOP_RIGHT, "--");
+        }
+        thick_box(12, 484, 456, 72, 3);
+        if (ct_ok && on && !isnan(ct)) {
+          float f = (ct - mn) / (mx - mn);
+          if (f < 0) f = 0;
+          if (f > 1) f = 1;
+          int mxp = 15 + (int) (f * 436);
+          it.filled_rectangle(mxp, 487, 14, 66, INK);
+        }
+        if (ct_ok) {
+          it.print(14, 562, id(f_small), INK, TextAlign::TOP_LEFT, "meleg");
+          it.print(466, 562, id(f_small), INK, TextAlign::TOP_RIGHT, "hideg");
+        }
+        // ---- súgó + VISSZA ----
+        it.print(W / 2, 616, id(f_small), INK, TextAlign::TOP_CENTER,
+                 "FEL / LE: lapozás     OK: vissza");
+        it.filled_rectangle(12, 660, 456, 92, INK);
+        it.image(140, 686, id(ic_back), PAPER, INK);
+        it.print(196, 684, id(f_head), PAPER, TextAlign::TOP_LEFT, "VISSZA");
+      }
+      else if (id(ui_mode) == 15) {
+        // ===== FŰTÉS =====
+        auto comma = [](char *b) { for (char *q = b; *q; q++) if (*q == '.') *q = ','; };
+        float cur = id(heat_cur).state;                     // a radiátorfej mérése
+        float tgt = !isnan(id(heat_set)) ? id(heat_set) : id(heat_target).state;
+        std::string mode = id(heat_mode).state;
+        char b[48];
+        // ---- nagy hőmérséklet ----
+        if (!isnan(cur)) { snprintf(b, sizeof(b), "%.1f°", cur); comma(b); } else snprintf(b, sizeof(b), "-");
+        it.print(W / 2, 62, id(f_big), INK, TextAlign::TOP_CENTER, b);
+        // ---- cél:  -  [érték]  + ----
+        thick_box(12, 186, 130, 120, 3);
+        it.print(77, 210, id(f_num), INK, TextAlign::TOP_CENTER, "-");
+        thick_box(150, 186, 180, 120, 3);
+        it.print(240, 196, id(f_small), INK, TextAlign::TOP_CENTER, "cél");
+        if (!isnan(tgt)) { snprintf(b, sizeof(b), "%.1f°", tgt); comma(b); } else snprintf(b, sizeof(b), "-");
+        it.print(240, 222, id(f_num), INK, TextAlign::TOP_CENTER, b);
+        thick_box(338, 186, 130, 120, 3);
+        it.print(403, 210, id(f_num), INK, TextAlign::TOP_CENTER, "+");
+        // ---- mód ----
+        const char *ml[3] = {"KI", "FŰTÉS", "AUTO"};
+        const char *mv[3] = {"off", "heat", "auto"};
+        for (int i = 0; i < 3; i++) {
+          int x = 12 + i * 152;
+          bool on = mode == mv[i];
+          if (on) it.filled_rectangle(x, 320, 152, 66, INK);
+          else    thick_box(x, 320, 152, 66, 3);
+          it.print(x + 76, 338, id(f_tile), on ? PAPER : INK, TextAlign::TOP_CENTER, ml[i]);
+        }
+        // ---- gyors beállítások ----
+        const char *pl[3] = {"${heat_preset1_label}", "${heat_preset2_label}", "${heat_preset3_label}"};
+        const float pv[3] = {(float) atof("${heat_preset1}"), (float) atof("${heat_preset2}"), (float) atof("${heat_preset3}")};
+        for (int i = 0; i < 3; i++) {
+          int x = 12 + i * 156;
+          bool on = !isnan(tgt) && fabsf(tgt - pv[i]) < 0.05f;
+          if (on) it.filled_rectangle(x, 400, 144, 72, INK);
+          else    thick_box(x, 400, 144, 72, 3);
+          it.print(x + 72, 408, id(f_state), on ? PAPER : INK, TextAlign::TOP_CENTER, pl[i]);
+          snprintf(b, sizeof(b), "%.0f°", pv[i]);
+          it.print(x + 72, 440, id(f_small), on ? PAPER : INK, TextAlign::TOP_CENTER, b);
+        }
+        // ---- grafikon: az utolsó 24 óra (10 percenként egy pont, „h” = akkor fűtött) ----
+        {
+          std::vector<float> v;
+          std::vector<bool> hh;
+          std::string src = id(heat_hist).state;
+          size_t a2 = 0;
+          while (a2 < src.size()) {
+            size_t e = src.find(',', a2);
+            if (e == std::string::npos) e = src.size();
+            std::string p = src.substr(a2, e - a2);
+            if (!p.empty() && ((p[0] >= '0' && p[0] <= '9') || p[0] == '-')) {
+              hh.push_back(p.back() == 'h');
+              v.push_back(atof(p.c_str()) / 10.0f);
+            }
+            a2 = e + 1;
+          }
+          const int cx0 = 46, cx1 = 460, cy0 = 524, cy1 = 694, N = 144;
+          it.print(14, 490, id(f_state), INK, TextAlign::TOP_LEFT, "Elmúlt 24 óra");
+          if (v.size() < 2) {
+            it.print(W / 2, 590, id(f_small), INK, TextAlign::TOP_CENTER, "Az előzmény a Home Assistantból jön,");
+            it.print(W / 2, 616, id(f_small), INK, TextAlign::TOP_CENTER, "10 percenként gyűlik.");
+          } else {
+            float mn = v[0], mx = v[0];
+            for (float x : v) { mn = std::min(mn, x); mx = std::max(mx, x); }
+            snprintf(b, sizeof(b), "min %.1f°  max %.1f°", mn, mx); comma(b);
+            it.print(466, 494, id(f_small), INK, TextAlign::TOP_RIGHT, b);
+            // skála: egész fokok az adatok (és a cél) körül, legalább 3 fok magas
+            float lo = floorf(std::min(mn, isnan(tgt) ? mn : tgt) - 0.5f);
+            float hi = ceilf(std::max(mx, isnan(tgt) ? mx : tgt) + 0.5f);
+            if (hi - lo < 3) hi = lo + 3;
+            int step = (hi - lo) > 6 ? 2 : 1;
+            auto Y = [&](float t) { return cy1 - (int) ((t - lo) / (hi - lo) * (cy1 - cy0)); };
+            // pontozott rácsvonalak feliratokkal
+            for (int g = (int) ceilf(lo); g <= (int) hi; g += step) {
+              int y = Y(g);
+              if (y <= cy0 - 2 || y >= cy1) continue;
+              for (int x = cx0; x < cx1; x += 10) it.horizontal_line(x, y, 4, INK);
+              snprintf(b, sizeof(b), "%d°", g);
+              it.print(cx0 - 6, y - 9, id(f_small), INK, TextAlign::TOP_RIGHT, b);
+            }
+            it.horizontal_line(cx0, cy1, cx1 - cx0, INK);
+            // cél: vastag szaggatott vonal
+            if (!isnan(tgt)) {
+              int y = Y(tgt);
+              for (int x = cx0; x < cx1; x += 16) it.filled_rectangle(x, y - 1, 9, 3, INK);
+            }
+            // hőmérséklet vonal (3 px vastag); a pontok a jobb szélhez (= most) igazodnak
+            int n = v.size();
+            auto X = [&](int i) { return cx1 - (int) ((float) (n - 1 - i) * (cx1 - cx0) / (N - 1)); };
+            for (int i = 1; i < n; i++) {
+              int x0 = X(i - 1), y0 = Y(v[i - 1]), x1 = X(i), y1 = Y(v[i]);
+              for (int o = -1; o <= 1; o++) it.line(x0, y0 + o, x1, y1 + o, INK);
+            }
+            // fűtési időszakok a tengely alatt
+            for (int i = 0; i < n; i++)
+              if (hh[i]) it.filled_rectangle(X(i) - 1, cy1 + 4, std::max(3, (cx1 - cx0) / (N - 1) + 1), 6, INK);
+            // időfeliratok
+            it.print(cx0, cy1 + 14, id(f_small), INK, TextAlign::TOP_LEFT, "-24 ó");
+            it.print(cx0 + (cx1 - cx0) / 4, cy1 + 14, id(f_small), INK, TextAlign::TOP_CENTER, "-18");
+            it.print(cx0 + (cx1 - cx0) / 2, cy1 + 14, id(f_small), INK, TextAlign::TOP_CENTER, "-12");
+            it.print(cx0 + 3 * (cx1 - cx0) / 4, cy1 + 14, id(f_small), INK, TextAlign::TOP_CENTER, "-6");
+            it.print(cx1, cy1 + 14, id(f_small), INK, TextAlign::TOP_RIGHT, "most");
+          }
+        }
+        it.print(W / 2, 752, id(f_small), INK, TextAlign::TOP_CENTER,
+                 !isnan(id(heat_set)) ? "küldés a Home Assistantnak..." : "FEL / LE: 0,5 fok   OK: vissza");
+      }
+      else if (id(ui_mode) == 14) {
+        // ===== IDŐJÁRÁS (ez látszik alvás közben is) =====
+        // formátum: "állapot|most|max|min|csap%|mm|szél|pára;Nap|állapot|max|min|csap%|mm;..." (csap% = -1, ha nincs adat)
+        std::vector<std::vector<std::string>> wx;
+        {
+          std::string src = id(st_weather).state;
+          size_t a = 0;
+          while (a <= src.size()) {
+            size_t b = src.find(';', a);
+            if (b == std::string::npos) b = src.size();
+            std::string part = src.substr(a, b - a);
+            std::vector<std::string> f;
+            size_t c = 0;
+            while (c <= part.size()) {
+              size_t d = part.find('|', c);
+              if (d == std::string::npos) d = part.size();
+              f.push_back(part.substr(c, d - c));
+              c = d + 1;
+            }
+            wx.push_back(f);
+            a = b + 1;
+          }
+        }
+        auto fld = [&](size_t r, size_t k) -> std::string {
+          return (r < wx.size() && k < wx[r].size()) ? wx[r][k] : std::string("");
+        };
+        auto num = [&](size_t r, size_t k) -> int { std::string v = fld(r, k); return v.empty() ? 0 : atoi(v.c_str()); };
+        auto kind = [](const std::string &c) -> int {
+          if (c == "sunny") return 0;
+          if (c == "clear-night") return 1;
+          if (c == "partlycloudy") return 2;
+          if (c == "cloudy") return 3;
+          if (c == "fog") return 4;
+          if (c == "rainy") return 5;
+          if (c == "pouring") return 6;
+          if (c == "lightning" || c == "lightning-rainy") return 7;
+          if (c == "snowy" || c == "snowy-rainy" || c == "hail") return 8;
+          if (c == "windy" || c == "windy-variant") return 9;
+          return 10;
+        };
+        auto hu = [](const std::string &c) -> const char * {
+          if (c == "sunny") return "Napos";
+          if (c == "clear-night") return "Tiszta éjszaka";
+          if (c == "partlycloudy") return "Részben felhős";
+          if (c == "cloudy") return "Felhős";
+          if (c == "fog") return "Köd";
+          if (c == "rainy") return "Esős";
+          if (c == "pouring") return "Felhőszakadás";
+          if (c == "lightning") return "Zivatar";
+          if (c == "lightning-rainy") return "Zivatar, eső";
+          if (c == "snowy") return "Havazás";
+          if (c == "snowy-rainy") return "Havas eső";
+          if (c == "hail") return "Jégeső";
+          if (c == "windy" || c == "windy-variant") return "Szeles";
+          return "Változó";
+        };
+        auto icon = [&](int k, bool big) -> esphome::image::Image * {
+          switch (k) {
+            case 0:  return big ? id(wb_sunny)   : id(ws_sunny);
+            case 1:  return big ? id(wb_night)   : id(ws_night);
+            case 2:  return big ? id(wb_partly)  : id(ws_partly);
+            case 3:  return big ? id(wb_cloudy)  : id(ws_cloudy);
+            case 4:  return big ? id(wb_fog)     : id(ws_fog);
+            case 5:  return big ? id(wb_rainy)   : id(ws_rainy);
+            case 6:  return big ? id(wb_pouring) : id(ws_pouring);
+            case 7:  return big ? id(wb_storm)   : id(ws_storm);
+            case 8:  return big ? id(wb_snowy)   : id(ws_snowy);
+            case 9:  return big ? id(wb_windy)   : id(ws_windy);
+            default: return big ? id(wb_alert)   : id(ws_alert);
+          }
+        };
+        // csapadék: esély %-ban, ha ismert, különben mennyiség mm-ben (tizedesvesszővel)
+        auto precip = [&](size_t r, size_t kp, size_t km) -> std::string {
+          int pp = fld(r, kp).empty() ? -1 : atoi(fld(r, kp).c_str());
+          char buf[16];
+          if (pp >= 0) { snprintf(buf, sizeof(buf), "%d%%", pp); return buf; }
+          std::string mm = fld(r, km);
+          if (mm.empty() || atof(mm.c_str()) <= 0.05f) return "0 mm";
+          for (auto &ch : mm) if (ch == '.') ch = ',';
+          return mm + " mm";
+        };
+
+        // ---- még nincs adat (épp felébredt, a Home Assistant még nem kapcsolódott) ----
+        std::string cnow = fld(0, 0);
+        if (cnow.empty() || cnow == "unknown" || cnow == "unavailable") {
+          it.image(165, 250, id(wb_partly), INK, PAPER);
+          it.print(W / 2, 430, id(f_head), INK, TextAlign::TOP_CENTER, "Időjárás betöltése...");
+          it.print(W / 2, 480, id(f_small), INK, TextAlign::TOP_CENTER, "Home Assistant: ${weather_entity}");
+        } else {
+        // ---- ma ----
+        it.image(24, 78, icon(kind(cnow), true), INK, PAPER);
+        it.printf(462, 70, id(f_big), INK, TextAlign::TOP_RIGHT, "%d°", num(0, 1));
+        it.print(W / 2, 250, id(f_head), INK, TextAlign::TOP_CENTER, hu(cnow));
+        it.printf(W / 2, 300, id(f_body), INK, TextAlign::TOP_CENTER, "max %d°   /   min %d°", num(0, 2), num(0, 3));
+
+        // ---- részletek ----
+        const char *dl[3] = {"Csapadék", "Szél", "Pára"};
+        std::string dv[3];
+        dv[0] = precip(0, 4, 5);
+        { char b[16]; snprintf(b, sizeof(b), "%d km/h", num(0, 6)); dv[1] = b; }
+        { char b[16]; snprintf(b, sizeof(b), "%d%%", num(0, 7)); dv[2] = b; }
+        for (int i = 0; i < 3; i++) {
+          int x = 14 + i * 156;
+          thick_box(x, 350, 140, 76, 3);
+          it.print(x + 70, 358, id(f_small), INK, TextAlign::TOP_CENTER, dl[i]);
+          it.print(x + 70, 384, id(f_tile), INK, TextAlign::TOP_CENTER, dv[i].c_str());
+        }
+
+        // ---- következő 3 nap (az esős / viharos / havas nap sötét) ----
+        it.print(14, 446, id(f_state), INK, TextAlign::TOP_LEFT, "KÖVETKEZŐ NAPOK");
+        it.filled_rectangle(14, 476, W - 28, 2, INK);
+        for (int i = 0; i < 3; i++) {
+          size_t r = i + 1;
+          int x = 14 + i * 156, y = 490;
+          if (r >= wx.size()) { thick_box(x, y, 140, 222, 3); continue; }
+          int k = kind(fld(r, 1));
+          bool wet = k >= 5 && k <= 8;
+          Color fg = wet ? PAPER : INK, bg = wet ? INK : PAPER;
+          if (wet) it.filled_rectangle(x, y, 140, 222, INK);
+          else     thick_box(x, y, 140, 222, 3);
+          it.print(x + 70, y + 14, id(f_state), fg, TextAlign::TOP_CENTER, fld(r, 0).c_str());
+          it.image(x + 34, y + 50, icon(k, false), fg, bg);
+          char t[24];
+          snprintf(t, sizeof(t), "%d° / %d°", num(r, 2), num(r, 3));
+          it.print(x + 70, y + 140, strlen(t) > 9 ? id(f_state) : id(f_tile), fg, TextAlign::TOP_CENTER, t);
+          it.print(x + 70, y + 184, id(f_small), fg, TextAlign::TOP_CENTER, precip(r, 4, 5).c_str());
+        }
+
+        // ---- lábléc: benti adatok (a Sticky saját érzékelője) + a rajzolás ideje ----
+        it.filled_rectangle(14, 730, W - 28, 2, INK);
+        if (id(temp_sensor).has_state()) {
+          char b[40];
+          snprintf(b, sizeof(b), "Bent: %.1f °C   %.0f%%", id(temp_sensor).state,
+                   id(hum_sensor).has_state() ? id(hum_sensor).state : 0.0f);
+          for (char *q = b; *q; q++) if (*q == '.') *q = ',';
+          it.print(14, 748, id(f_body), INK, TextAlign::TOP_LEFT, b);
+        }
+        auto tn = id(rtc_time).now();
+        if (tn.is_valid())
+          it.strftime(466, 754, id(f_small), INK, TextAlign::TOP_RIGHT, "frissítve %H:%M", tn);
+        }   // van adat
+      }
+      // =================== ASSZISZTENS: VÁLASZ ===============
+      else {
+        // amit kérdeztél: sötét sáv a teljes szélességben
+        auto q = wrap(id(last_heard), 30);
+        if (q.size() > 2) q.resize(2);
+        int qh = 16 + (int) q.size() * 27 + 13;
+        it.filled_rectangle(0, 58, W, qh, INK);
+        for (size_t i = 0; i < q.size(); i++) {
+          it.print(W / 2, 58 + 14 + (int) i * 27, id(f_body), PAPER,
+                   TextAlign::TOP_CENTER, q[i].c_str());
+        }
+        // a válasz, optikailag középre igazítva
+        std::string rtext = id(last_reply).empty() ? std::string("(nincs válasz)")
+                                                   : id(last_reply);
+        auto r = wrap(rtext, 24);
+        const int LH = 42;
+        int top   = 58 + qh;
+        int avail = 646 - top;
+        int blockh = (int) r.size() * LH;
+        int ry = top + (avail - blockh) / 2;
+        if (ry < top + 12) ry = top + 12;
+        for (size_t i = 0; i < r.size(); i++) {
+          it.print(W / 2, ry + (int) i * LH, id(f_reply), INK,
+                   TextAlign::TOP_CENTER, r[i].c_str());
+        }
+        // VISSZA: teljes szélességben. A helye egyezzen a touchscreen zónával.
+        it.filled_rectangle(12, 660, 456, 92, INK);
+        it.image(157, 686, id(ic_back), PAPER, INK);
+        it.print(213, 684, id(f_head), PAPER, TextAlign::TOP_LEFT, "VISSZA");
+      }
+
+# Rendszeres frissítés ébren (csak low_power: "false" mellett számít igazán).
+interval:
+  - interval: 10min
+    then:
+      - script.execute: redraw
+
+# gombok a Home Assistantban
+button:
+  - platform: template
+    name: "Kijelző frissítése"
+    on_press:
+      - script.execute: redraw
+  - platform: template
+    name: "Asszisztens indítása"
+    on_press:
+      - voice_assistant.start:
+  - platform: restart
+    name: "Újraindítás"
+    entity_category: config
